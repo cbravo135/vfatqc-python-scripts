@@ -1,5 +1,6 @@
 #!/bin/env python
 import os
+import numpy as np
 from optparse import OptionParser
 from array import array
 from fitScanData import *
@@ -25,6 +26,8 @@ parser.add_option("-p","--panasonic", action="store_true", dest="PanPin",
                   help="Make plots vs Panasonic pins instead of strips", metavar="PanPin")
 parser.add_option("--IsTrimmed", action="store_true", dest="IsTrimmed",
                   help="If the data is from a trimmed scan, plot the value it tried aligning to", metavar="IsTrimmed")
+parser.add_option("--ztrim", type="int", dest="ztrim", default=1.0,
+                  help="Specify ztrim for errors on fit Summary", metavar="ztrim")
 
 
 (options, args) = parser.parse_args()
@@ -33,6 +36,9 @@ os.system("mkdir " + filename)
 
 print filename
 outfilename = options.outfilename
+
+vToQb = -0.8
+vToQm = 0.05
 
 import ROOT as r
 
@@ -46,13 +52,16 @@ if options.SaveFile:
     myT = r.TTree('scurveFitTree','Tree Holding FitData')
     pass
 #Build the channel to strip mapping from the text file
-lookup_table = []
+chToStrLUT = []
+strToChLUT = []
 pan_lookup = []
 for vfat in range(0,24):
-    lookup_table.append([])
+    chToStrLUT.append([])
+    strToChLUT.append([])
     pan_lookup.append([])
     for channel in range(0,128):
-        lookup_table[vfat].append(0)
+        chToStrLUT[vfat].append(0)
+        strToChLUT[vfat].append(0)
         pan_lookup[vfat].append(0)
         pass
     pass
@@ -68,8 +77,9 @@ if GEBtype == 'short':
 for i, line in enumerate(intext):
     if i == 0: continue
     mapping = line.rsplit('\t')
-    lookup_table[int(mapping[0])][int(mapping[2]) -1] = int(mapping[1])
-    pan_lookup[int(mapping[0])][int(mapping[2]) -1] = int(mapping[3])
+    chToStrLUT[int(mapping[0])][int(mapping[2]) - 1] = int(mapping[1])
+    strToChLUT[int(mapping[0])][int(mapping[1])] = int(mapping[2]) - 1
+    pan_lookup[int(mapping[0])][int(mapping[2]) - 1] = int(mapping[3])
     pass
 
 if options.IsTrimmed:
@@ -130,7 +140,7 @@ trimrange_list = []
 lines = []
 def overlay_fit(VFAT, CH):
     Scurve = r.TH1D('Scurve','Scurve for VFAT %i channel %i;VCal [DAC units]'%(VFAT, CH),255,-0.5,254.5)
-    strip = lookup_table[VFAT][CH]
+    strip = chToStrLUT[VFAT][CH]
     pan_pin = pan_lookup[VFAT][CH]
     for event in inF.scurveTree:
         if (event.vfatN == VFAT) and (event.vfatCH == CH):
@@ -163,17 +173,17 @@ for i in range(0,24):
         lines.append(r.TLine(-0.5, trimVcal[i], 127.5, trimVcal[i]))
         pass
     if not (options.channels or options.PanPin):
-        vSum[i] = r.TH2D('vSum%i'%i,'vSum%i;Strip;VCal [DAC units]'%i,128,-0.5,127.5,256,-0.5,255.5)
+        vSum[i] = r.TH2D('vSum%i'%i,'VFAT %i;Strip;VCal [fC]'%i,128,-0.5,127.5,256,vToQm*-0.5+vToQb,vToQm*255.5+vToQb)
         vSum[i].GetYaxis().SetTitleOffset(1.5)
         pass
     if options.channels:
-        vSum[i] = r.TH2D('vSum%i'%i,'vSum%i;Channels;VCal [DAC units]'%i,128,-0.5,127.5,256,-0.5,255.5)
+        vSum[i] = r.TH2D('vSum%i'%i,'VFAT %i;Channels;VCal [fC]'%i,128,-0.5,127.5,256,vToQm*-0.5+vToQb,vToQm*255.5+vToQb)
         vSum[i].GetYaxis().SetTitleOffset(1.5)
         pass
     if options.PanPin:
-        vSum[i] = r.TH2D('vSum%i'%i,'vSum%i_0-63;63 - Panasonic Pin;VCal [DAC units]'%i,64,-0.5,63.5,256,-0.5,255.5)
+        vSum[i] = r.TH2D('vSum%i'%i,'VFAT %i_0-63;63 - Panasonic Pin;VCal [fC]'%i,64,-0.5,63.5,256,vToQm*-0.5+vToQb,vToQm*255.5+vToQb)
         vSum[i].GetYaxis().SetTitleOffset(1.5)
-        vSum2[i] = r.TH2D('vSum2_%i'%i,'vSum%i_64-127;127 - Panasonic Pin;VCal [DAC units]'%i,64,-0.5,63.5,256,-0.5,255.5)
+        vSum2[i] = r.TH2D('vSum2_%i'%i,'vSum%i_64-127;127 - Panasonic Pin;VCal [fC]'%i,64,-0.5,63.5,256,vToQm*-0.5+vToQb,vToQm*255.5+vToQb)
         vSum2[i].GetYaxis().SetTitleOffset(1.5)
         pass
     for ch in range (0,128):
@@ -191,20 +201,20 @@ if options.SaveFile:
 
 
 for event in inF.scurveTree:
-    strip = lookup_table[event.vfatN][event.vfatCH]
+    strip = chToStrLUT[event.vfatN][event.vfatCH]
     pan_pin = pan_lookup[event.vfatN][event.vfatCH]
     if not (options.channels or options.PanPin):
-        vSum[event.vfatN].Fill(strip,event.vcal,event.Nhits)
+        vSum[event.vfatN].Fill(strip,vToQm*event.vcal+vToQb,event.Nhits)
         pass
     if options.channels:
-        vSum[event.vfatN].Fill(event.vfatCH,event.vcal,event.Nhits)
+        vSum[event.vfatN].Fill(event.vfatCH,vToQm*event.vcal+vToQb,event.Nhits)
         pass
     if options.PanPin:
         if (pan_pin < 64):
-            vSum[event.vfatN].Fill(63-pan_pin,event.vcal,event.Nhits)
+            vSum[event.vfatN].Fill(63-pan_pin,vToQm*event.vcal+vToQb,event.Nhits)
             pass
         else:
-            vSum2[event.vfatN].Fill(127-pan_pin,event.vcal,event.Nhits)
+            vSum2[event.vfatN].Fill(127-pan_pin,vToQm*event.vcal+vToQb,event.Nhits)
             pass
         pass
     x = vScurves[event.vfatN][event.vfatCH].FindBin(event.vcal)
@@ -216,10 +226,15 @@ for event in inF.scurveTree:
     pass
 if options.SaveFile:
     masks = []
+    fitSums = {}
     for vfat in range (0,24):
+        fitThr = []
+        fitENC = []
+        strList = []
         masks.append([])
-        for ch in range (0, 128):
-            strip = lookup_table[vfat][ch]
+        for st in range (0, 128):
+            strList.append(float(st))
+            ch = strToChLUT[vfat][st]
             pan_pin = pan_lookup[vfat][ch]
             #Filling the Branches
             param0 = scanFits[0][vfat][ch]
@@ -232,13 +247,15 @@ if options.SaveFile:
             ped_eff[0] = FittedFunction.Eval(0.0)
             vfatN[0] = vfat
             vfatCH[0] = ch
-            ROBstr[0] = strip
+            ROBstr[0] = st
             panPin[0] = pan_pin
             trimRange[0] = trimrange_list[vfat][ch] 
             vthr[0] = vthr_list[vfat][ch]
             trimDAC[0] = trim_list[vfat][ch]
             threshold[0] = param0
+            fitThr.append(vToQm*param0+vToQb)
             noise[0] = param1
+            fitENC.append(vToQm*param1*options.ztrim)
             pedestal[0] = param2
             if noise[0] > 20.0 or ped_eff[0] > 50.0: mask[0] = True
             else: mask[0] = False
@@ -257,6 +274,10 @@ if options.SaveFile:
                 pass
             myT.Fill()
             pass 
+        fitSums[vfat] = r.TGraphErrors(len(fitThr),np.array(strList),np.array(fitThr),np.zeros(len(fitThr)),np.array(fitENC))
+        fitSums[vfat].SetName("fitSum%i"%vfat)
+        fitSums[vfat].SetTitle("VFAT %i Fit Summary;Strip;Threshold [fC]"%vfat)
+        fitSums[vfat].SetMarkerStyle(2)
         pass
     pass
 
@@ -299,6 +320,18 @@ else:
 
 canv.SaveAs(filename+'/Summary.png')
 
+canv = r.TCanvas('canv','canv',500*8,500*3)
+canv.Divide(8,3)
+r.gStyle.SetOptStat(0)
+for i in range(0,24):
+    r.gStyle.SetOptStat(0)
+    canv.cd(i+1)
+    fitSums[i].Draw('ap')
+    canv.Update()
+    pass
+
+canv.SaveAs(filename+'/fitSummary.png')
+
 if options.SaveFile:
     confF = open(filename+'/chConfig.txt','w')
     confF.write('vfatN/I:vfatCH/I:trimDAC/I:mask/I\n')
@@ -309,6 +342,9 @@ if options.SaveFile:
         pass
     confF.close()
     outF.cd()
+    for vfat in range (0,24):
+        fitSums[vfat].Write()
+        pass
     myT.Write()
     outF.Close()
     pass
